@@ -310,10 +310,30 @@ def load_devices(site_filter=''):
                 
                 # Apply site filter if specified
                 if site_filter:
-                    if site_filter.lower() in row['name'].lower():
-                        devices.append(row)
+                    device_name = row['name'].lower()
+                    site_filter = site_filter.lower()
+                    
+                    # Split the filter into components
+                    if ',' in site_filter:
+                        # AND operation using comma
+                        filters = [f.strip() for f in site_filter.split(',')]
+                        if all(f in device_name for f in filters):
+                            devices.append(row)
+                    elif '|' in site_filter:
+                        # OR operation using pipe
+                        filters = [f.strip() for f in site_filter.split('|')]
+                        if any(f in device_name for f in filters):
+                            devices.append(row)
+                    else:
+                        # Single filter case
+                        if site_filter in device_name:
+                            devices.append(row)
                 else:
                     devices.append(row)
+        
+        if not devices:
+            logger.warning(f"No devices found matching the filter: {site_filter}")
+            sys.exit(1)
         return devices
     except Exception as e:
         logger.error(f"Error loading devices configuration: {str(e)}")
