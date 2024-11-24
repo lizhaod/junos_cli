@@ -290,7 +290,7 @@ class LogCapture:
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
-    parser.add_argument('-s', '--device', 
+    parser.add_argument('-d', '--device', 
                       help='Filter devices by regex pattern (case-insensitive)',
                       default='')
     parser.add_argument('-o', '--output',

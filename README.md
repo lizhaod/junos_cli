@@ -18,6 +18,7 @@ This tool allows you to execute commands on multiple Junos devices simultaneousl
   - Individual device connection status
   - Estimated time remaining
   - Task completion spinner
+- Powerful regex-based device filtering
 
 ## Installation
 
@@ -36,14 +37,13 @@ pip install -r requirements.txt
 
 ### Basic Usage
 ```bash
-python junos_cli.py                      # Basic usage with terminal output
-python junos_cli.py -s NYC               # Filter devices by site code
-python junos_cli.py -o results.json      # Save results to JSON file
-python junos_cli.py -s NYC -o output.txt # Combine site filter and output file
+python junos_cli.py                    # Run with all devices
+python junos_cli.py -o results.json    # Save results to JSON file
+python junos_cli.py -d sin -o out.txt  # Filter devices and save output
 ```
 
 ### Command-line Options
-- `-s, --site`: Filter devices by site code (case-insensitive)
+- `-d, --device`: Filter devices using regex patterns (see Device Filtering section)
 - `-o, --output`: Save results to a file (supports .json, .csv, or .txt formats)
 
 ### Command Features
@@ -64,6 +64,53 @@ When using the `-o` option, the following formats are supported:
 - `.json`: Full structured data (best for programmatic use)
 - `.csv`: Comma-separated values (good for spreadsheet applications)
 - `.txt`: Human-readable text format with clear separators
+
+## Device Filtering
+
+The tool supports powerful regex-based device filtering using the `-d` or `--device` argument. This allows you to filter devices using:
+
+- Regular expressions
+- AND operations (using comma)
+- OR operations (using pipe)
+
+All patterns are case-insensitive.
+
+### Filter Examples
+
+```bash
+# Basic regex patterns
+python junos_cli.py -d "r00[ab]"      # Matches devices containing r00a or r00b
+python junos_cli.py -d "^sin"         # Matches devices starting with 'sin'
+python junos_cli.py -d "00a$"         # Matches devices ending with '00a'
+
+# AND operation (comma-separated)
+python junos_cli.py -d "sin,r00"      # Matches devices containing both 'sin' AND 'r00'
+python junos_cli.py -d "^sin.*,bb"    # Matches devices starting with 'sin' AND containing 'bb'
+
+# OR operation (pipe-separated)
+python junos_cli.py -d "sin|hkg"      # Matches devices containing either 'sin' OR 'hkg'
+python junos_cli.py -d "^sin|^hkg"    # Matches devices starting with either 'sin' OR 'hkg'
+```
+
+### Interactive Confirmation
+
+After filtering devices, the tool will display a list of matched devices and prompt for confirmation:
+
+```
+Filtered Devices:
+┌─────┬──────────────────┐
+│ No. │ Device Name      │
+├─────┼──────────────────┤
+│   1 │ sin-sg2-bbjr00a  │
+│   2 │ hkg-cs2-bbjr00b  │
+└─────┴──────────────────┘
+
+Total devices: 2
+
+Proceed with these devices? (y/n):
+```
+
+This gives you a chance to verify the filtered device list before proceeding with any operations.
 
 ## Configuration
 
