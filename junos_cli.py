@@ -434,17 +434,21 @@ def execute_command(device_info, command, credentials):
                             cu.commit()
                         result = "Configuration committed successfully"
                         
+                    # Add port indicator to device name (NETCONF for 830, SSH for 22)
+                    port_indicator = "NETCONF" if port == 830 else "SSH"
+                    device_name = f"{device_info['name']}:{port_indicator}"
+                    
                     return {
-                        'device': device_info['name'],
+                        'device': device_name,
                         'status': 'success',
                         'output': result
                     }
                     
         except ConnectError as e:
-            logger.error(f"Connection failed on port {port} for {device_info['name']} ({device_info['host']}): {str(e)}")
+            # Don't log the error, just return None to try next port
             return None
         except Exception as e:
-            logger.error(f"Error on port {port} for {device_info['name']} ({device_info['host']}): {str(e)}")
+            # Don't log the error, just return None to try next port
             return None
 
     # Try NETCONF port first (830)
@@ -457,7 +461,7 @@ def execute_command(device_info, command, credentials):
     if result:
         return result
 
-    # If both attempts fail, return error
+    # If both attempts fail, now we log the error
     error_msg = "Failed to connect on both NETCONF (830) and SSH (22) ports"
     logger.error(f"{error_msg} for {device_info['name']} ({device_info['host']})")
     return {
