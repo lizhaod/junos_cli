@@ -21,6 +21,7 @@ from prompt_toolkit.completion import WordCompleter, Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -289,16 +290,24 @@ class LogCapture:
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
-    parser.add_argument('-s', '--site', 
-                      help='Filter devices by site code (case-insensitive)',
+    parser.add_argument('-s', '--device', 
+                      help='Filter devices by regex pattern (case-insensitive)',
                       default='')
     parser.add_argument('-o', '--output',
                       help='Output file path (supports .json, .txt, or .csv formats)',
                       default='')
     return parser.parse_args()
 
-def load_devices(site_filter=''):
-    """Load device information from CSV file."""
+def load_devices(device_filter=''):
+    """
+    Load device information from CSV file.
+    
+    Args:
+        device_filter (str): Regex pattern for filtering device names. 
+                           Supports AND (,) and OR (|) operations.
+                           Example: 'sin,r00' matches devices containing both 'sin' and 'r00'
+                                  'sin|hkg' matches devices containing either 'sin' or 'hkg'
+    """
     try:
         devices = []
         with open('devices.csv', 'r') as file:
@@ -308,33 +317,38 @@ def load_devices(site_filter=''):
                 if not row['host'].strip():
                     row['host'] = row['name']
                 
-                # Apply site filter if specified
-                if site_filter:
+                # Apply device filter if specified
+                if device_filter:
                     device_name = row['name'].lower()
-                    site_filter = site_filter.lower()
+                    device_filter = device_filter.lower()
                     
                     # Split the filter into components
-                    if ',' in site_filter:
+                    if ',' in device_filter:
                         # AND operation using comma
-                        filters = [f.strip() for f in site_filter.split(',')]
-                        if all(f in device_name for f in filters):
+                        patterns = [f.strip() for f in device_filter.split(',')]
+                        if all(re.search(pattern, device_name) for pattern in patterns):
                             devices.append(row)
-                    elif '|' in site_filter:
+                    elif '|' in device_filter:
                         # OR operation using pipe
-                        filters = [f.strip() for f in site_filter.split('|')]
-                        if any(f in device_name for f in filters):
+                        # Combine patterns with | for a single regex OR operation
+                        combined_pattern = '|'.join(f'(?:{f.strip()})' for f in device_filter.split('|'))
+                        if re.search(combined_pattern, device_name):
                             devices.append(row)
                     else:
                         # Single filter case
-                        if site_filter in device_name:
+                        if re.search(device_filter, device_name):
                             devices.append(row)
                 else:
                     devices.append(row)
         
         if not devices:
-            logger.warning(f"No devices found matching the filter: {site_filter}")
+            logger.warning(f"No devices found matching the filter: {device_filter}")
             sys.exit(1)
+            
         return devices
+    except re.error as e:
+        logger.error(f"Invalid regex pattern in device filter: {str(e)}")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Error loading devices configuration: {str(e)}")
         sys.exit(1)
@@ -575,21 +589,48 @@ def display_results(results, output_file=None):
     if output_file:
         save_results(results, output_file)
 
+def confirm_devices(devices):
+    """Display filtered devices and ask for confirmation."""
+    console.print("\n[bold blue]Filtered Devices:[/bold blue]")
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("No.", style="dim", justify="right")
+    table.add_column("Device Name")
+    
+    for idx, device in enumerate(devices, 1):
+        table.add_row(str(idx), device['name'])
+    
+    console.print(table)
+    console.print(f"\nTotal devices: [bold green]{len(devices)}[/bold green]")
+    
+    while True:
+        response = input("\nProceed with these devices? (y/n): ").lower().strip()
+        if response == 'y':
+            return True
+        elif response == 'n':
+            return False
+        else:
+            console.print("[yellow]Please enter 'y' for yes or 'n' for no.[/yellow]")
+
 def main():
     """Main function to run the CLI tool."""
     args = parse_arguments()
-    devices = load_devices(args.site)
+    devices = load_devices(args.device)
     
     if not devices:
-        if args.site:
-            console.print(f"[red]No devices found matching site code: {args.site}[/red]")
+        if args.device:
+            console.print(f"[red]No devices found matching device filter: {args.device}[/red]")
         else:
             console.print("[red]No devices found in the configuration file[/red]")
         sys.exit(1)
     
     console.print("[bold blue]Junos Multi-Device CLI Tool[/bold blue]")
-    if args.site:
-        console.print(f"[blue]Filtered by site: {args.site}[/blue]")
+    if args.device:
+        console.print(f"[blue]Filtered by device pattern: {args.device}[/blue]")
+    
+    # Get user confirmation for the filtered devices
+    if not confirm_devices(devices):
+        console.print("[yellow]Operation cancelled by user[/yellow]")
+        sys.exit(0)
     
     credentials = get_credentials()
     
