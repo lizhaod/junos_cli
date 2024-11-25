@@ -22,6 +22,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
 import re
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -659,3 +660,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def connect_with_retry(host, user, passwd, retries=3, delay=5):
+    for attempt in range(retries):
+        try:
+            dev = Device(host=host, user=user, passwd=passwd, timeout=60)
+            dev.open()
+            return dev
+        except ConnectError as e:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise e
+
+# Example usage
+# dev = connect_with_retry('hostname', 'username', 'password')
