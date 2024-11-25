@@ -21,6 +21,7 @@ from prompt_toolkit.completion import WordCompleter, Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
 import re
 import time
 
@@ -113,6 +114,21 @@ class JunosCompleter(Completer):
                     current[part] = {}
                 current = current[part]
         
+        # Add pipe commands as single words
+        self.pipe_words = [
+            "display",
+            "match",
+            "except",
+            "find",
+            "count",
+            "compare",
+            "last",
+            "trim",
+            "resolve",
+            "save",
+            "no-more"
+        ]
+        
     def get_next_level_completions(self, words):
         """Get completions for the next level based on current input."""
         current = self.command_tree
@@ -138,6 +154,21 @@ class JunosCompleter(Completer):
     
     def get_completions(self, document, complete_event):
         word_before_cursor = document.text_before_cursor
+        
+        # Handle pipe commands
+        if '|' in word_before_cursor:
+            # Get text after the last pipe
+            pipe_parts = word_before_cursor.split('|')
+            current_part = pipe_parts[-1].strip()
+            
+            # Complete pipe word if there's partial input
+            if current_part:
+                for word in self.pipe_words:
+                    if word.lower().startswith(current_part.lower()):
+                        yield Completion(word, start_position=-len(current_part))
+            return
+        
+        # Normal command completion (no pipe)
         words = word_before_cursor.split()
         
         if not words:
@@ -160,7 +191,9 @@ class JunosCompleter(Completer):
 
 def get_command():
     """Get command with auto-completion support."""
-    session = PromptSession()
+    session = PromptSession(
+        history=FileHistory('.junos_cli_history')
+    )
     completer = JunosCompleter(JUNOS_COMMANDS)
     kb = KeyBindings()
     
@@ -174,10 +207,10 @@ def get_command():
         completions = list(completer.get_completions(buffer.document, None))
         
         if len(completions) == 1:
-            # Single completion - add the completed word
+            # Single completion - add the completed word with a space
             completion = completions[0]
             word_before_cursor = words[-1] if words else ""
-            new_word = completion.text
+            new_word = completion.text + " "  # Add space after completion
             
             # Replace the last word with the completion
             if words:
@@ -210,30 +243,6 @@ def get_command():
                 
             if command.lower() == 'exit':
                 return command
-            
-            # Verify if the command is in our list
-            matching_command = next(
-                (cmd for cmd in JUNOS_COMMANDS if cmd.lower() == command.lower()),
-                None
-            )
-            
-            if matching_command:
-                return matching_command
-            
-            # If no exact match but command starts with valid prefix
-            matching_commands = [
-                cmd for cmd in JUNOS_COMMANDS 
-                if cmd.lower().startswith(command.lower())
-            ]
-            
-            if len(matching_commands) == 1:
-                return matching_commands[0]
-            elif len(matching_commands) > 1:
-                console.print("\nMatching commands:")
-                for cmd in matching_commands:
-                    console.print(f"  {cmd}")
-                console.print("\nPlease be more specific.")
-                continue
             
             return command
             
@@ -379,7 +388,7 @@ def execute_command(device_info, command, credentials):
         'TCPKeepAlive': 'yes',
         'ControlMaster': 'auto',
         'ControlPersist': '10m',
-        'ConnectTimeout': '300',
+        'ConnectTimeout': '10',
         'ConnectionAttempts': '3',
         'GSSAPIAuthentication': 'no',
         'PreferredAuthentications': 'password,keyboard-interactive',
@@ -397,7 +406,7 @@ def execute_command(device_info, command, credentials):
         'password': password,
         'gather_facts': False,  # Skip fact gathering for faster connection
         'normalize': True,
-        'timeout': 300,  # Connection timeout in seconds (5 minutes)
+        'timeout': 10,  # Connection timeout in seconds
         'attempts': 1,   # Set to 1 as we'll handle retries manually
         'auto_probe': 30,  # Auto probe every 30 seconds
         'ssh_config': None,  # Using custom ssh_options instead
@@ -619,32 +628,25 @@ def confirm_devices(devices):
 
 def main():
     """Main function to run the CLI tool."""
-    args = parse_arguments()
-    devices = load_devices(args.device)
-    
-    if not devices:
-        if args.device:
-            console.print(f"[red]No devices found matching device filter: {args.device}[/red]")
-        else:
-            console.print("[red]No devices found in the configuration file[/red]")
-        sys.exit(1)
-    
-    console.print("[bold blue]Junos Multi-Device CLI Tool[/bold blue]")
-    if args.device:
-        console.print(f"[blue]Filtered by device pattern: {args.device}[/blue]")
-    
-    # Get user confirmation for the filtered devices
-    if not confirm_devices(devices):
-        console.print("[yellow]Operation cancelled by user[/yellow]")
-        sys.exit(0)
-    
-    credentials = get_credentials()
-    
-    console.print("\n[blue]Type 'exit' to end the application[/blue]")
-    console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
-
-    while True:
-        try:
+    try:
+        args = parse_arguments()
+        devices = load_devices(args.device)
+        
+        if not devices:
+            console.print("[red]No devices found or all were filtered out[/red]")
+            sys.exit(1)
+        
+        # Get user confirmation for the filtered devices
+        if not confirm_devices(devices):
+            console.print("[yellow]Operation cancelled by user[/yellow]")
+            sys.exit(0)
+        
+        credentials = get_credentials()
+        
+        console.print("\n[blue]Type 'exit' to end the application[/blue]")
+        console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
+        
+        while True:
             command = get_command()
             
             if command.lower() == 'exit':
@@ -653,11 +655,19 @@ def main():
             results = execute_commands_with_progress(devices, command, credentials)
             display_results(results, args.output)
             
-        except KeyboardInterrupt:
-            console.print("\n[blue]Operation cancelled by user[/blue]")
-            break
-        except Exception as e:
-            console.print(f"[red]Error: {str(e)}[/red]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Operation cancelled by user[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]Error: {str(e)}[/red]")
+        sys.exit(1)
+    finally:
+        # Clean up history file
+        try:
+            history_file = '.junos_cli_history'
+            if os.path.exists(history_file):
+                os.remove(history_file)
+        except:
+            pass  # Ignore any errors during cleanup
 
 if __name__ == "__main__":
     main()
