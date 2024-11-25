@@ -398,62 +398,63 @@ def execute_command(device_info, command, credentials):
         'gather_facts': False,  # Skip fact gathering for faster connection
         'normalize': True,
         'timeout': 300,  # Connection timeout in seconds (5 minutes)
-        'attempts': 3,   # Number of connection attempts
+        'attempts': 1,   # Set to 1 as we'll handle retries manually
         'auto_probe': 30,  # Auto probe every 30 seconds
         'ssh_config': None,  # Using custom ssh_options instead
         'ssh_private_key_file': None,
         'ssh_options': ssh_config
     }
     
-    def try_connection(port):
-        """Try to connect using specified port."""
-        try:
-            with suppress_junos_logs():
-                # Update device parameters with current port
-                dev_params = device_params.copy()
-                dev_params['port'] = port
-                
-                # Attempt connection
-                dev = Device(**dev_params)
-                
-                with dev:
-                    # Execute command based on type
-                    if base_command.startswith('show'):
-                        result = dev.cli(base_command, warning=False)
-                        
-                        # Apply grep filter if specified
-                        if grep_pattern:
-                            filtered_lines = []
-                            for line in result.split('\n'):
-                                if grep_pattern.lower() in line.lower():
-                                    filtered_lines.append(line)
-                            result = '\n'.join(filtered_lines)
-                    else:
-                        # For configuration commands
-                        with dev.config(mode='exclusive') as cu:
-                            cu.load(base_command, format='set')
-                            cu.commit()
-                        result = "Configuration committed successfully"
-                        
-                    # Add port indicator to device name (NETCONF for 830, SSH for 22)
-                    port_indicator = "NETCONF" if port == 830 else "SSH"
-                    device_name = f"{device_info['name']}:{port_indicator}"
+    def try_connection(port, max_retries=1):
+        """Try to connect using specified port with retries."""
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                with suppress_junos_logs():
+                    # Update device parameters with current port
+                    dev_params = device_params.copy()
+                    dev_params['port'] = port
                     
-                    return {
-                        'device': device_name,
-                        'status': 'success',
-                        'output': result
-                    }
+                    # Attempt connection
+                    dev = Device(**dev_params)
                     
-        except ConnectError as e:
-            # Don't log the error, just return None to try next port
-            return None
-        except Exception as e:
-            # Don't log the error, just return None to try next port
-            return None
+                    with dev:
+                        # Execute command based on type
+                        if base_command.startswith('show'):
+                            result = dev.cli(base_command, warning=False)
+                            
+                            # Apply grep filter if specified
+                            if grep_pattern:
+                                filtered_lines = []
+                                for line in result.split('\n'):
+                                    if grep_pattern.lower() in line.lower():
+                                        filtered_lines.append(line)
+                                result = '\n'.join(filtered_lines)
+                        else:
+                            # For configuration commands
+                            with dev.config(mode='exclusive') as cu:
+                                cu.load(base_command, format='set')
+                                cu.commit()
+                            result = "Configuration committed successfully"
+                            
+                        # Add port indicator to device name
+                        port_indicator = "NETCONF" if port == 830 else "SSH"
+                        device_name = f"{device_info['name']}:{port_indicator}"
+                        
+                        return {
+                            'device': device_name,
+                            'status': 'success',
+                            'output': result
+                        }
+                        
+            except (ConnectError, Exception) as e:
+                last_error = e
+                continue
+        
+        return None
 
-    # Try NETCONF port first (830)
-    result = try_connection(830)
+    # Try NETCONF port first (830) with 3 retries
+    result = try_connection(830, max_retries=3)
     if result:
         return result
         
@@ -463,7 +464,7 @@ def execute_command(device_info, command, credentials):
         return result
 
     # If both attempts fail, now we log the error
-    error_msg = "Failed to connect on both NETCONF (830) and SSH (22) ports"
+    error_msg = "Failed to connect on both NETCONF (830, 3 retries) and SSH (22) ports"
     logger.error(f"{error_msg} for {device_info['name']} ({device_info['host']})")
     return {
         'device': device_info['name'],
