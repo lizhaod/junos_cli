@@ -389,7 +389,7 @@ def execute_command(device_info, command, credentials):
         'ControlMaster': 'auto',
         'ControlPersist': '10m',
         'ConnectTimeout': '10',
-        'ConnectionAttempts': '3',
+        'ConnectionAttempts': '2',
         'GSSAPIAuthentication': 'no',
         'PreferredAuthentications': 'password,keyboard-interactive',
         'NumberOfPasswordPrompts': '3',
@@ -414,7 +414,7 @@ def execute_command(device_info, command, credentials):
         'ssh_options': ssh_config
     }
     
-    def try_connection(port, max_retries=1):
+    def try_connection(port, max_retries=2):
         """Try to connect using specified port with retries."""
         last_error = None
         for attempt in range(max_retries):
@@ -462,18 +462,18 @@ def execute_command(device_info, command, credentials):
         
         return None
 
-    # Try NETCONF port first (830) with 3 retries
-    result = try_connection(830, max_retries=3)
+    # Try NETCONF port first (830) with 2 retries
+    result = try_connection(830, max_retries=2)
     if result:
         return result
         
-    # Fallback to SSH port (22)
-    result = try_connection(22)
+    # Fallback to SSH port (22) with 2 retries
+    result = try_connection(22, max_retries=2)
     if result:
         return result
 
     # If both attempts fail, now we log the error
-    error_msg = "Failed to connect on both NETCONF (830, 3 retries) and SSH (22) ports"
+    error_msg = "Failed to connect on both NETCONF (830, 2 retries) and SSH (22, 2 retries) ports"
     logger.error(f"{error_msg} for {device_info['name']} ({device_info['host']})")
     return {
         'device': device_info['name'],
