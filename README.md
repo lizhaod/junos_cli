@@ -80,16 +80,16 @@ All patterns are case-insensitive.
 ```bash
 # Basic regex patterns
 python junos_cli.py -d "r00[ab]"      # Matches devices containing r00a or r00b
-python junos_cli.py -d "^sin"         # Matches devices starting with 'sin'
+python junos_cli.py -d "^nyc"         # Matches devices starting with 'nyc'
 python junos_cli.py -d "00a$"         # Matches devices ending with '00a'
 
 # AND operation (comma-separated)
-python junos_cli.py -d "sin,r00"      # Matches devices containing both 'sin' AND 'r00'
-python junos_cli.py -d "^sin.*,bb"    # Matches devices starting with 'sin' AND containing 'bb'
+python junos_cli.py -d "nyc,r00"      # Matches devices containing both 'nyc' AND 'r00'
+python junos_cli.py -d "^nyc.*,bb"    # Matches devices starting with 'nyc' AND containing 'bb'
 
 # OR operation (pipe-separated)
-python junos_cli.py -d "sin|hkg"      # Matches devices containing either 'sin' OR 'hkg'
-python junos_cli.py -d "^sin|^hkg"    # Matches devices starting with either 'sin' OR 'hkg'
+python junos_cli.py -d "nyc|lax"      # Matches devices containing either 'nyc' OR 'lax'
+python junos_cli.py -d "^nyc|^lax"    # Matches devices starting with either 'nyc' OR 'lax'
 ```
 
 ### Interactive Confirmation
@@ -101,16 +101,14 @@ Filtered Devices:
 ┌─────┬──────────────────┐
 │ No. │ Device Name      │
 ├─────┼──────────────────┤
-│   1 │ sin-sg2-bbjr00a  │
-│   2 │ hkg-cs2-bbjr00b  │
+│   1 │ NYC-router1-r00a │
+│   2 │ LAX-router2-r00b │
 └─────┴──────────────────┘
 
 Total devices: 2
 
 Proceed with these devices? (y/n):
 ```
-
-This gives you a chance to verify the filtered device list before proceeding with any operations.
 
 ## Configuration
 
@@ -122,14 +120,13 @@ Example `devices.csv`:
 ```csv
 name,host
 NYC-router1,192.168.1.1
-NYC-router2,10.0.0.2
-LAX-router1,
+LAX-router2,10.0.0.2
 BOS-router1,
 ```
 
 In this example:
-- NYC-router1 and NYC-router2 will be accessed using their IP addresses
-- LAX-router1 and BOS-router1 will be accessed using their hostnames directly
+- NYC-router1 and LAX-router2 will be accessed using their IP addresses
+- BOS-router1 will be accessed using its hostname directly
 
 This flexibility allows you to:
 - Use IP addresses when DNS is not available or for specific routing requirements
