@@ -485,7 +485,7 @@ def execute_command(device_info, command, credentials):
     }
 
 def execute_commands_with_progress(devices, command, credentials):
-    """Execute commands on all devices with a progress bar.""" 
+    """Execute commands on all devices with a progress bar."""
     results = []
     error_console = Console(stderr=True, highlight=False)
     
@@ -507,7 +507,7 @@ def execute_commands_with_progress(devices, command, credentials):
         try:
             # Create single progress task
             task = progress.add_task(
-                f"[cyan]Executing command on {len(devices)} devices..."),
+                f"[cyan]Executing command on {len(devices)} devices...",
                 total=len(devices)
             )
             
@@ -537,7 +537,6 @@ def execute_commands_with_progress(devices, command, credentials):
                         if result['status'] == 'error':
                             error_console.print(f"[red]{result['device']}: {result['output']}[/red]")
                             
-
                     except Exception as e:
                         error_msg = f"Error: {str(e)}"
                         results.append({
