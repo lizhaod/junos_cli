@@ -24,6 +24,7 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 import re
 import time
+from typing import List, Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -199,7 +200,7 @@ def get_command():
     
     @kb.add('tab')
     def _(event):
-        """Handle tab completion."""
+        """Handle tab completion.""" 
         buffer = event.current_buffer
         words = buffer.text.split()
         
@@ -253,7 +254,7 @@ def get_command():
 
 @contextmanager
 def suppress_junos_logs():
-    """Temporarily suppress Junos connection logs."""
+    """Temporarily suppress Junos connection logs.""" 
     original_level = logging.getLogger('ncclient.transport.session').level
     logging.getLogger('ncclient.transport.session').setLevel(logging.ERROR)
     try:
@@ -262,7 +263,7 @@ def suppress_junos_logs():
         logging.getLogger('ncclient.transport.session').setLevel(original_level)
 
 class LogCapture:
-    """Context manager to capture and store log messages."""
+    """Context manager to capture and store log messages.""" 
     def __init__(self):
         self.messages = []
         self.handler = None
@@ -290,7 +291,7 @@ class LogCapture:
         logger.addHandler(logging.StreamHandler())
         
     def display_logs(self):
-        """Display all captured log messages only if errors occurred."""
+        """Display all captured log messages only if errors occurred.""" 
         if self.has_error:
             console.print("\n[bold red]Connection Errors:[/bold red]")
             for message in self.messages:
@@ -298,7 +299,7 @@ class LogCapture:
                     console.print(message)
 
 def parse_arguments():
-    """Parse command line arguments."""
+    """Parse command line arguments.""" 
     parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
     parser.add_argument('-d', '--device', 
                       help='Filter devices by regex pattern (case-insensitive)',
@@ -364,14 +365,14 @@ def load_devices(device_filter=''):
         sys.exit(1)
 
 def get_credentials():
-    """Prompt for username and password."""
+    """Prompt for username and password.""" 
     console.print("\n[bold blue]Enter credentials for device access:[/bold blue]")
     username = Prompt.ask("[yellow]Username[/yellow]")
     password = getpass("Password: ")
     return username, password
 
 def execute_command(device_info, command, credentials):
-    """Execute command on a single device and return the result."""
+    """Execute command on a single device and return the result.""" 
     username, password = credentials
     
     # Split command and grep pattern if exists
@@ -415,7 +416,7 @@ def execute_command(device_info, command, credentials):
     }
     
     def try_connection(port, max_retries=2):
-        """Try to connect using specified port with retries."""
+        """Try to connect using specified port with retries.""" 
         last_error = None
         for attempt in range(max_retries):
             try:
@@ -432,6 +433,7 @@ def execute_command(device_info, command, credentials):
                         if base_command.startswith('show'):
                             result = dev.cli(base_command, warning=False)
                             
+
                             # Apply grep filter if specified
                             if grep_pattern:
                                 filtered_lines = []
@@ -446,6 +448,7 @@ def execute_command(device_info, command, credentials):
                                 cu.commit()
                             result = "Configuration committed successfully"
                             
+
                         # Add port indicator to device name
                         port_indicator = "NETCONF" if port == 830 else "SSH"
                         device_name = f"{device_info['name']}:{port_indicator}"
@@ -482,7 +485,7 @@ def execute_command(device_info, command, credentials):
     }
 
 def execute_commands_with_progress(devices, command, credentials):
-    """Execute commands on all devices with a progress bar."""
+    """Execute commands on all devices with a progress bar.""" 
     results = []
     error_console = Console(stderr=True, highlight=False)
     
@@ -504,7 +507,7 @@ def execute_commands_with_progress(devices, command, credentials):
         try:
             # Create single progress task
             task = progress.add_task(
-                f"[cyan]Executing command on {len(devices)} devices...",
+                f"[cyan]Executing command on {len(devices)} devices..."),
                 total=len(devices)
             )
             
@@ -534,6 +537,7 @@ def execute_commands_with_progress(devices, command, credentials):
                         if result['status'] == 'error':
                             error_console.print(f"[red]{result['device']}: {result['output']}[/red]")
                             
+
                     except Exception as e:
                         error_msg = f"Error: {str(e)}"
                         results.append({
@@ -551,8 +555,25 @@ def execute_commands_with_progress(devices, command, credentials):
     print("")
     return results
 
-def save_results(results, output_file):
-    """Save results to a file based on the file extension."""
+def get_device_type_priority(device_name: str) -> int:
+    """Return priority number for device type based on name prefix.""" 
+    device_name = device_name.lower()
+    if 'bbjr' in device_name:
+        return 0
+    elif 'isr' in device_name:
+        return 1
+    elif 'rob' in device_name:
+        return 2
+    elif 'ibs' in device_name:
+        return 3
+    return 4  # Other device types get lowest priority
+
+def sort_results_by_device_type(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sort results by device type priority.""" 
+    return sorted(results, key=lambda x: get_device_type_priority(x['device']))
+
+def save_results(results: List[Dict[str, Any]], output_file: str):
+    """Save results to a file based on the file extension.""" 
     # Get file extension
     _, ext = os.path.splitext(output_file.lower())
     
@@ -583,14 +604,17 @@ def save_results(results, output_file):
     except Exception as e:
         console.print(f"\n[red]Error saving results to {output_file}: {str(e)}[/red]")
 
-def display_results(results, output_file=None):
-    """Display results in a formatted table and optionally save to file."""
+def display_results(results: List[Dict[str, Any]], output_file: str = None):
+    """Display results in a formatted table and optionally save to file.""" 
+    # Sort results by device type
+    sorted_results = sort_results_by_device_type(results)
+    
     table = Table(show_header=True, header_style="bold magenta", show_lines=True)
     table.add_column("Device", style="cyan")
     table.add_column("Status", width=12)
     table.add_column("Output")
 
-    for result in results:
+    for result in sorted_results:
         status_color = "green" if result['status'] == 'success' else "red"
         table.add_row(
             result['device'],
@@ -602,10 +626,10 @@ def display_results(results, output_file=None):
     
     # Save results if output file is specified
     if output_file:
-        save_results(results, output_file)
+        save_results(sorted_results, output_file)
 
 def confirm_devices(devices):
-    """Display filtered devices and ask for confirmation."""
+    """Display filtered devices and ask for confirmation.""" 
     console.print("\n[bold blue]Filtered Devices:[/bold blue]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("No.", style="dim", justify="right")
@@ -627,7 +651,7 @@ def confirm_devices(devices):
             console.print("[yellow]Please enter 'y' for yes or 'n' for no.[/yellow]")
 
 def main():
-    """Main function to run the CLI tool."""
+    """Main function to run the CLI tool.""" 
     try:
         args = parse_arguments()
         devices = load_devices(args.device)
