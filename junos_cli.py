@@ -555,23 +555,6 @@ def execute_commands_with_progress(devices, command, credentials):
     print("")
     return results
 
-def get_device_type_priority(device_name: str) -> int:
-    """Return priority number for device type based on name prefix.""" 
-    device_name = device_name.lower()
-    if 'bbjr' in device_name:
-        return 0
-    elif 'isr' in device_name:
-        return 1
-    elif 'rob' in device_name:
-        return 2
-    elif 'ibs' in device_name:
-        return 3
-    return 4  # Other device types get lowest priority
-
-def sort_results_by_device_type(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sort results by device type priority.""" 
-    return sorted(results, key=lambda x: get_device_type_priority(x['device']))
-
 def save_results(results: List[Dict[str, Any]], output_file: str):
     """Save results to a file based on the file extension.""" 
     # Get file extension
@@ -606,15 +589,12 @@ def save_results(results: List[Dict[str, Any]], output_file: str):
 
 def display_results(results: List[Dict[str, Any]], output_file: str = None):
     """Display results in a formatted table and optionally save to file.""" 
-    # Sort results by device type
-    sorted_results = sort_results_by_device_type(results)
-    
     table = Table(show_header=True, header_style="bold magenta", show_lines=True)
     table.add_column("Device", style="cyan")
     table.add_column("Status", width=12)
     table.add_column("Output")
 
-    for result in sorted_results:
+    for result in results:
         status_color = "green" if result['status'] == 'success' else "red"
         table.add_row(
             result['device'],
@@ -626,7 +606,7 @@ def display_results(results: List[Dict[str, Any]], output_file: str = None):
     
     # Save results if output file is specified
     if output_file:
-        save_results(sorted_results, output_file)
+        save_results(results, output_file)
 
 def confirm_devices(devices):
     """Display filtered devices and ask for confirmation.""" 
