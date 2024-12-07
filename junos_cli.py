@@ -3,7 +3,7 @@
 import csv
 import concurrent.futures
 from jnpr.junos import Device
-from jnpr.junos.exception import ConnectError
+from jnpr.junos.exception import ConnectError, ConnectAuthError
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
@@ -27,7 +27,10 @@ import time
 from typing import List, Dict, Any
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,  # Changed from DEBUG to INFO
+    format='%(levelname)s:%(name)s:%(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Suppress all ncclient-related logs
@@ -382,6 +385,10 @@ def execute_command(device_info, command, credentials):
     base_command = command_parts[0]
     grep_pattern = command_parts[1] if len(command_parts) > 1 else None
     
+    logger.debug(f"Executing command on {device_info['name']}: {base_command}")
+    if grep_pattern:
+        logger.debug(f"With grep pattern: {grep_pattern}")
+    
     # Enhanced SSH connection parameters
     ssh_config = {
         'StrictHostKeyChecking': 'no',
@@ -417,9 +424,42 @@ def execute_command(device_info, command, credentials):
         'ssh_options': ssh_config
     }
     
+    def is_auth_error(error):
+        """Check if the error is an authentication error."""
+        error_str = str(error).lower()
+        logger.debug(f"Checking error: {error_str}")
+        
+        # Check if it's a ConnectAuthError by type
+        if isinstance(error, ConnectAuthError):
+            logger.debug("Detected ConnectAuthError type")
+            return True
+        
+        auth_indicators = [
+            'authentication failed',
+            'permission denied',
+            'auth fail',
+            'incorrect password',
+            'bad password',
+            'invalid password',
+            'unauthorized',
+            'access denied',
+            'authentication error',
+            'invalid credentials',
+            'connectautherror',
+            'error: invalid credentials',
+            'error: permission denied',
+            'error: authentication failed'
+        ]
+        
+        is_auth = any(indicator in error_str for indicator in auth_indicators)
+        logger.debug(f"Authentication error detected: {is_auth}")
+        return is_auth
+    
     def try_connection(port, max_retries=2):
         """Try to connect using specified port with retries.""" 
-        last_error = None
+        auth_error = None
+        other_error = None
+        
         for attempt in range(max_retries):
             try:
                 with suppress_junos_logs():
@@ -427,19 +467,25 @@ def execute_command(device_info, command, credentials):
                     dev_params = device_params.copy()
                     dev_params['port'] = port
                     
+                    logger.debug(f"Attempting connection to {device_info['name']} on port {port}")
                     # Attempt connection
                     dev = Device(**dev_params)
                     
                     with dev:
                         # Execute command based on type
                         if base_command.startswith('show'):
+                            logger.debug("Executing show command")
                             result = dev.cli(base_command, warning=False)
-                            # Ensure result is a string
+                            logger.debug(f"Raw command output type: {type(result)}")
+                            logger.debug(f"Raw command output: {result}")
+                            
+                            # Convert result to string if it's not already
                             if not isinstance(result, str):
                                 result = str(result)
                             
                             # Apply grep filter if specified
                             if grep_pattern:
+                                logger.debug("Applying grep filter")
                                 filtered_lines = []
                                 for line in result.split('\n'):
                                     if grep_pattern.lower() in line.lower():
@@ -447,46 +493,61 @@ def execute_command(device_info, command, credentials):
                                 result = '\n'.join(filtered_lines)
                         else:
                             # For configuration commands
+                            logger.debug("Executing configuration command")
                             with dev.config(mode='exclusive') as cu:
                                 cu.load(base_command, format='set')
                                 cu.commit()
                             result = "Configuration committed successfully"
                             
-
                         # Add port indicator to device name
                         port_indicator = "NETCONF" if port == 830 else "SSH"
                         device_name = f"{device_info['name']}:{port_indicator}"
                         
+                        logger.debug("Command execution successful")
                         return {
                             'device': device_name,
                             'status': 'success',
                             'output': result
                         }
                         
-            except (ConnectError, Exception) as e:
-                last_error = e
+            except Exception as e:
+                logger.debug(f"Connection attempt failed: {str(e)}")
+                if is_auth_error(e):
+                    auth_error = e
+                else:
+                    other_error = e
                 continue
         
-        return None
+        # If we get here, all retries failed
+        if auth_error:
+            return {
+                'device': device_info['name'],
+                'status': 'auth_error',
+                'output': str(auth_error)
+            }
+        elif other_error:
+            return {
+                'device': device_info['name'],
+                'status': 'error',
+                'output': str(other_error)
+            }
+        else:
+            return {
+                'device': device_info['name'],
+                'status': 'error',
+                'output': 'Connection failed after all retries'
+            }
 
     # Try NETCONF port first (830) with 2 retries
+    logger.debug("Attempting NETCONF connection")
     result = try_connection(830, max_retries=2)
-    if result:
+    if result and result['status'] == 'success':
         return result
         
     # Fallback to SSH port (22) with 2 retries
+    logger.debug("Attempting SSH connection")
     result = try_connection(22, max_retries=2)
-    if result:
-        return result
-
-    # If both attempts fail, now we log the error
-    error_msg = "Failed to connect on both NETCONF (830, 2 retries) and SSH (22, 2 retries) ports"
-    logger.error(f"{error_msg} for {device_info['name']} ({device_info['host']})")
-    return {
-        'device': device_info['name'],
-        'status': 'error',
-        'output': error_msg
-    }
+    return result
 
 def execute_commands_with_progress(devices, command, credentials):
     """Execute commands on all devices with a progress bar."""
@@ -531,24 +592,61 @@ def execute_commands_with_progress(devices, command, credentials):
                     device = future_to_device[future]
                     try:
                         result = future.result()
-                        # Update progress description to show current device
-                        progress.update(task, 
-                                     advance=1, 
-                                     description=f"[cyan]Processing {result['device']} ({future_to_device[future]['host']})...")
-                        results.append(result)
                         
-                        # If there's an error in the result, display it
-                        if result['status'] == 'error':
-                            error_console.print(f"[red]{result['device']}: {result['output']}[/red]")
+                        # Update progress description
+                        progress.update(
+                            task,
+                            advance=1,
+                            description=f"[cyan]Processing {device['name']} ({device['host']})..."
+                        )
+                        
+                        # Handle string result (error case)
+                        if isinstance(result, str):
+                            error_result = {
+                                'device': device['name'],
+                                'status': 'error',
+                                'output': result
+                            }
+                            error_console.print(f"[red]{device['name']}: {result}[/red]")
+                            results.append(error_result)
+                            continue
                             
-                    except Exception as e:
-                        error_msg = f"Error: {str(e)}"
-                        results.append({
+                        # Handle None result
+                        if result is None:
+                            error_result = {
+                                'device': device['name'],
+                                'status': 'error',
+                                'output': 'Command execution failed'
+                            }
+                            error_console.print(f"[red]{device['name']}: Command execution failed[/red]")
+                            results.append(error_result)
+                            continue
+                            
+                        # Handle dictionary result (success or error case)
+                        if isinstance(result, dict):
+                            if result['status'] == 'error':
+                                error_console.print(f"[red]{result['device']}: {result['output']}[/red]")
+                            results.append(result)
+                            continue
+                            
+                        # Handle unexpected result type
+                        error_result = {
                             'device': device['name'],
                             'status': 'error',
-                            'output': error_msg
-                        })
-                        error_console.print(f"[red]{device['name']}: {error_msg}[/red]")
+                            'output': f'Unexpected result type: {type(result)}'
+                        }
+                        error_console.print(f"[red]{device['name']}: Unexpected result type: {type(result)}[/red]")
+                        results.append(error_result)
+                        
+                    except Exception as e:
+                        logger.exception(f"Error executing command on {device['name']}")
+                        error_result = {
+                            'device': device['name'],
+                            'status': 'error',
+                            'output': str(e)
+                        }
+                        error_console.print(f"[red]{device['name']}: {str(e)}[/red]")
+                        results.append(error_result)
                         progress.update(task, advance=1)
                         
         finally:
@@ -601,24 +699,37 @@ def save_results(results: List[Dict[str, Any]], output_file: str):
     except Exception as e:
         console.print(f"\n[red]Error saving results to {output_file}: {str(e)}[/red]")
 
-def display_results(results: List[Dict[str, Any]], output_file: str = None, sort_output: bool = False):
+def display_results(results, output_file=None, sort_output=False):
     """Display results in a formatted table and optionally save to file.""" 
     if sort_output:
         results = sort_results(results)
         
-    table = Table(show_header=True, header_style="bold magenta", show_lines=True)
+    table = Table(title="Command Results", show_lines=True)  # Added show_lines=True for grid lines
     table.add_column("Device", style="cyan")
-    table.add_column("Status", width=12)
-    table.add_column("Output")
-
+    table.add_column("Status", style="magenta")
+    table.add_column("Output", style="green", no_wrap=False)
+    
     for result in results:
-        status_color = "green" if result['status'] == 'success' else "red"
+        # Get status color
+        status_style = {
+            'success': 'green',
+            'error': 'red',
+            'auth_error': 'yellow'
+        }.get(result['status'], 'white')
+        
+        # Format output based on status
+        output = str(result.get('output', ''))  # Ensure output is a string
+        if not output:
+            output = 'No output'
+            
+        # Add row to table with appropriate styling
         table.add_row(
             result['device'],
-            f"[{status_color}]{result['status']}[/{status_color}]",
-            result['output']
+            f"[{status_style}]{result['status']}[/{status_style}]",
+            output
         )
-
+    
+    # Print table
     console.print(table)
     
     # Save results if output file is specified
@@ -663,6 +774,7 @@ def main():
             sys.exit(0)
         
         credentials = get_credentials()
+        MAX_AUTH_ATTEMPTS = 3
         
         console.print("\n[blue]Type 'exit' to end the application[/blue]")
         console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
@@ -673,8 +785,28 @@ def main():
             if command.lower() == 'exit':
                 break
             
-            results = execute_commands_with_progress(devices, command, credentials)
-            display_results(results, args.output, args.sort)
+            auth_failed = True
+            auth_attempts = 0
+            
+            while auth_failed and auth_attempts < MAX_AUTH_ATTEMPTS:
+                results = execute_commands_with_progress(devices, command, credentials)
+                
+                # Check if any device had authentication errors
+                auth_errors = any(r['status'] == 'auth_error' for r in results)
+                
+                if auth_errors:
+                    auth_attempts += 1
+                    if auth_attempts < MAX_AUTH_ATTEMPTS:
+                        console.print(f"\n[red]Authentication failed. Attempt {auth_attempts} of {MAX_AUTH_ATTEMPTS}[/red]")
+                        credentials = get_credentials()
+                    continue
+                
+                auth_failed = False
+                display_results(results, args.output, args.sort)
+            
+            if auth_failed:
+                console.print("\n[red]Maximum authentication attempts reached. Please check your credentials.[/red]")
+                break
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled by user[/yellow]")
