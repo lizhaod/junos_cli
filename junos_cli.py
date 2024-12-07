@@ -307,6 +307,8 @@ def parse_arguments():
     parser.add_argument('-o', '--output',
                       help='Output file path (supports .json, .txt, or .csv formats)',
                       default='')
+    parser.add_argument('-s', '--sort', action='store_true',
+                      help='Sort output: devices with output first, then alphabetically')
     return parser.parse_args()
 
 def load_devices(device_filter=''):
@@ -432,8 +434,10 @@ def execute_command(device_info, command, credentials):
                         # Execute command based on type
                         if base_command.startswith('show'):
                             result = dev.cli(base_command, warning=False)
+                            # Ensure result is a string
+                            if not isinstance(result, str):
+                                result = str(result)
                             
-
                             # Apply grep filter if specified
                             if grep_pattern:
                                 filtered_lines = []
@@ -554,6 +558,17 @@ def execute_commands_with_progress(devices, command, credentials):
     print("")
     return results
 
+def sort_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sort results by output presence and then alphabetically."""
+    def sort_key(result):
+        # First key: 0 if has output, 1 if empty or error (for reverse sorting)
+        has_output = 0 if result['output'].strip() and result['status'] == 'success' else 1
+        # Second key: device name in lowercase for alphabetical sorting
+        device_name = result['device'].lower()
+        return (has_output, device_name)
+    
+    return sorted(results, key=sort_key)
+
 def save_results(results: List[Dict[str, Any]], output_file: str):
     """Save results to a file based on the file extension.""" 
     # Get file extension
@@ -586,8 +601,11 @@ def save_results(results: List[Dict[str, Any]], output_file: str):
     except Exception as e:
         console.print(f"\n[red]Error saving results to {output_file}: {str(e)}[/red]")
 
-def display_results(results: List[Dict[str, Any]], output_file: str = None):
+def display_results(results: List[Dict[str, Any]], output_file: str = None, sort_output: bool = False):
     """Display results in a formatted table and optionally save to file.""" 
+    if sort_output:
+        results = sort_results(results)
+        
     table = Table(show_header=True, header_style="bold magenta", show_lines=True)
     table.add_column("Device", style="cyan")
     table.add_column("Status", width=12)
@@ -656,7 +674,7 @@ def main():
                 break
             
             results = execute_commands_with_progress(devices, command, credentials)
-            display_results(results, args.output)
+            display_results(results, args.output, args.sort)
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled by user[/yellow]")
