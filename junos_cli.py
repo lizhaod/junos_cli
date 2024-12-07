@@ -6,8 +6,9 @@ from jnpr.junos import Device
 from jnpr.junos.exception import ConnectError, ConnectAuthError
 from rich.console import Console
 from rich.table import Table
-from rich.prompt import Prompt
+from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.prompt import Prompt, Confirm
 from rich import print as rprint
 import sys
 import logging
@@ -758,6 +759,36 @@ def confirm_devices(devices):
         else:
             console.print("[yellow]Please enter 'y' for yes or 'n' for no.[/yellow]")
 
+def test_authentication(device, max_retries=3):
+    """Test authentication with a device, allowing credential retries."""
+    for attempt in range(max_retries):
+        # Get credentials
+        credentials = get_credentials()
+        if not credentials:
+            return None, None
+            
+        console.print(f"\n[cyan]Testing authentication with {device['name']} (Attempt {attempt + 1}/{max_retries})...[/cyan]")
+        test_result = execute_command(device, "show version", credentials)
+        
+        if test_result['status'] == 'auth_error':
+            console.print(f"\n[red]Authentication failed: {test_result['output']}[/red]")
+            if attempt < max_retries - 1:
+                console.print("\n[yellow]Please try again with different credentials.[/yellow]")
+                continue
+            else:
+                console.print("\n[red]Maximum authentication attempts reached.[/red]")
+                return None, None
+        elif test_result['status'] == 'error':
+            console.print(f"\n[yellow]Warning: Test device connection failed: {test_result['output']}[/yellow]")
+            if not Prompt.ask("Do you want to proceed with all devices?"):
+                return None, None
+            return credentials, test_result
+        else:
+            console.print(f"\n[green]Authentication successful with {device['name']}[/green]")
+            return credentials, test_result
+            
+    return None, None
+
 def main():
     """Main function to run the CLI tool.""" 
     try:
@@ -773,9 +804,10 @@ def main():
             console.print("[yellow]Operation cancelled by user[/yellow]")
             sys.exit(0)
         
-        credentials = get_credentials()
-        MAX_AUTH_ATTEMPTS = 3
-        
+        credentials, test_result = test_authentication(devices[0])
+        if not credentials:
+            return
+            
         console.print("\n[blue]Type 'exit' to end the application[/blue]")
         console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
         
@@ -785,28 +817,8 @@ def main():
             if command.lower() == 'exit':
                 break
             
-            auth_failed = True
-            auth_attempts = 0
-            
-            while auth_failed and auth_attempts < MAX_AUTH_ATTEMPTS:
-                results = execute_commands_with_progress(devices, command, credentials)
-                
-                # Check if any device had authentication errors
-                auth_errors = any(r['status'] == 'auth_error' for r in results)
-                
-                if auth_errors:
-                    auth_attempts += 1
-                    if auth_attempts < MAX_AUTH_ATTEMPTS:
-                        console.print(f"\n[red]Authentication failed. Attempt {auth_attempts} of {MAX_AUTH_ATTEMPTS}[/red]")
-                        credentials = get_credentials()
-                    continue
-                
-                auth_failed = False
-                display_results(results, args.output, args.sort)
-            
-            if auth_failed:
-                console.print("\n[red]Maximum authentication attempts reached. Please check your credentials.[/red]")
-                break
+            results = execute_commands_with_progress(devices, command, credentials)
+            display_results(results, args.output, args.sort)
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled by user[/yellow]")
