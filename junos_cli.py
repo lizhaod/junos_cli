@@ -365,10 +365,24 @@ def load_devices(use_polarcall=False):
                 with open(temp_csv_file, 'r') as file:
                     csv_reader = csv.DictReader(file)
                     for row in csv_reader:
+                        # Create description by joining manufacturer and model
+                        manufacturer = row.get('manufacturer', '')
+                        model = row.get('model', '')
+                        
+                        if manufacturer and model:
+                            description = f"{manufacturer} {model}"
+                        elif model:
+                            description = model
+                        elif manufacturer:
+                            description = manufacturer
+                        else:
+                            description = 'Unknown'
+                            
                         # Map polarcall fields to the expected format
                         device = {
                             'name': row.get('hostname', ''),
-                            'host': row.get('ip_address', '')
+                            'host': row.get('ip_address', ''),
+                            'description': description
                         }
                         
                         # Skip devices without hostname or IP
@@ -393,6 +407,13 @@ def load_devices(use_polarcall=False):
                     # If host is empty, use the hostname (name) instead
                     if not row['host'].strip():
                         row['host'] = row['name']
+                    
+                    # If description is available in CSV, use it
+                    if 'description' not in row and 'model' in row:
+                        row['description'] = row['model']
+                    elif 'description' not in row:
+                        row['description'] = 'Unknown'
+                        
                     devices.append(row)
         
         if not devices:
@@ -773,13 +794,17 @@ def display_results(results, output_file=None, sort_output=False):
 
 def confirm_devices(devices):
     """Display filtered devices and ask for confirmation.""" 
-    console.print("\n[bold blue]Filtered Devices:[/bold blue]")
+    console.print("\n[bold blue]Selected Devices:[/bold blue]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("No.", style="dim", justify="right")
     table.add_column("Device Name")
+    table.add_column("IP Address", style="cyan")
+    table.add_column("Description", style="green")
     
     for idx, device in enumerate(devices, 1):
-        table.add_row(str(idx), device['name'])
+        # Get description if available, otherwise use "Unknown"
+        description = device.get('description', 'Unknown')
+        table.add_row(str(idx), device['name'], device['host'], description)
     
     console.print(table)
     console.print(f"\nTotal devices: [bold green]{len(devices)}[/bold green]")
