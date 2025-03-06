@@ -83,6 +83,7 @@ JUNOS_COMMANDS = [
     # Configuration commands
     "show configuration interfaces",
     "show configuration protocols",
+    "show configuration routing-instances",
     "show configuration routing-options",
     "show configuration policy-options",
     "show configuration firewall",
@@ -305,9 +306,8 @@ class LogCapture:
 def parse_arguments():
     """Parse command line arguments.""" 
     parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
-    parser.add_argument('-d', '--device', 
-                      help='Filter devices by regex pattern (case-insensitive)',
-                      default='')
+    parser.add_argument('-p', '--polarcall', action='store_true',
+                      help='Use polarcall.py to generate device list')
     parser.add_argument('-o', '--output',
                       help='Output file path (supports .json, .txt, or .csv formats)',
                       default='')
@@ -315,57 +315,91 @@ def parse_arguments():
                       help='Sort output: devices with output first, then alphabetically')
     return parser.parse_args()
 
-def load_devices(device_filter=''):
+def load_devices(use_polarcall=False):
     """
-    Load device information from CSV file.
+    Load device information from CSV file or from polarcall.py.
     
     Args:
-        device_filter (str): Regex pattern for filtering device names. 
-                           Supports AND (,) and OR (|) operations.
-                           Example: 'sin,r00' matches devices containing both 'sin' and 'r00'
-                                  'sin|hkg' matches devices containing either 'sin' or 'hkg'
+        use_polarcall (bool): If True, use polarcall.py to generate device list
     """
     try:
         devices = []
-        with open('devices.csv', 'r') as file:
-            csv_reader = csv.DictReader(file)
-            for row in csv_reader:
-                # If host is empty, use the hostname (name) instead
-                if not row['host'].strip():
-                    row['host'] = row['name']
+        
+        if use_polarcall:
+            # Check if polarcall.py exists in the expected location
+            polarcall_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                                         'Polarcall', 'polarcall.py')
+            
+            if not os.path.exists(polarcall_path):
+                console.print(f"[red]Error: Could not find polarcall.py at {polarcall_path}[/red]")
+                console.print("[yellow]Looking for polarcall.py in current directory...[/yellow]")
+                polarcall_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'polarcall.py')
                 
-                # Apply device filter if specified
-                if device_filter:
-                    device_name = row['name'].lower()
-                    device_filter = device_filter.lower()
-                    
-                    # Split the filter into components
-                    if ',' in device_filter:
-                        # AND operation using comma
-                        patterns = [f.strip() for f in device_filter.split(',')]
-                        if all(re.search(pattern, device_name) for pattern in patterns):
-                            devices.append(row)
-                    elif '|' in device_filter:
-                        # OR operation using pipe
-                        # Combine patterns with | for a single regex OR operation
-                        combined_pattern = '|'.join(f'(?:{f.strip()})' for f in device_filter.split('|'))
-                        if re.search(combined_pattern, device_name):
-                            devices.append(row)
-                    else:
-                        # Single filter case
-                        if re.search(device_filter, device_name):
-                            devices.append(row)
-                else:
+                if not os.path.exists(polarcall_path):
+                    console.print("[red]Error: Could not find polarcall.py[/red]")
+                    return []
+            
+            # Create a temporary file to store polarcall output
+            temp_csv_file = 'temp_devices.csv'
+            
+            # Build polarcall command with CSV output
+            console.print("[blue]Running polarcall.py to get device list...[/blue]")
+            
+            # Let the user input additional parameters for polarcall
+            console.print("[yellow]Enter polarcall.py parameters (leave empty to use defaults):[/yellow]")
+            polarcall_params = Prompt.ask("Parameters", default="")
+            
+            # Build the command
+            cmd = f"python {polarcall_path} --format csv --output {temp_csv_file} {polarcall_params}"
+            
+            # Execute polarcall command
+            console.print(f"[green]Executing: {cmd}[/green]")
+            ret = os.system(cmd)
+            
+            if ret != 0:
+                console.print("[red]Error executing polarcall.py[/red]")
+                return []
+            
+            # Read the CSV file generated by polarcall
+            if os.path.exists(temp_csv_file):
+                with open(temp_csv_file, 'r') as file:
+                    csv_reader = csv.DictReader(file)
+                    for row in csv_reader:
+                        # Map polarcall fields to the expected format
+                        device = {
+                            'name': row.get('hostname', ''),
+                            'host': row.get('ip_address', '')
+                        }
+                        
+                        # Skip devices without hostname or IP
+                        if not device['name'] or not device['host']:
+                            continue
+                            
+                        devices.append(device)
+                
+                # Clean up temporary file
+                try:
+                    os.remove(temp_csv_file)
+                except:
+                    pass
+            else:
+                console.print(f"[red]Error: {temp_csv_file} not found[/red]")
+                return []
+        else:
+            # Original CSV loading logic
+            with open('devices.csv', 'r') as file:
+                csv_reader = csv.DictReader(file)
+                for row in csv_reader:
+                    # If host is empty, use the hostname (name) instead
+                    if not row['host'].strip():
+                        row['host'] = row['name']
                     devices.append(row)
         
         if not devices:
-            logger.warning(f"No devices found matching the filter: {device_filter}")
+            logger.warning("No devices found")
             sys.exit(1)
             
         return devices
-    except re.error as e:
-        logger.error(f"Invalid regex pattern in device filter: {str(e)}")
-        sys.exit(1)
     except Exception as e:
         logger.error(f"Error loading devices configuration: {str(e)}")
         sys.exit(1)
@@ -793,7 +827,7 @@ def main():
     """Main function to run the CLI tool.""" 
     try:
         args = parse_arguments()
-        devices = load_devices(args.device)
+        devices = load_devices(args.polarcall)
         
         if not devices:
             console.print("[red]No devices found or all were filtered out[/red]")
