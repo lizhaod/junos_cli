@@ -436,18 +436,14 @@ def execute_command(device_info, command, credentials):
     """Execute command on a single device and return the result.""" 
     username, password = credentials
     
-    # Split command and pipe pattern if exists - improved parser for pipe commands
-    pipe_commands = []
-    if ' | ' in command:
-        parts = command.split(' | ')
-        base_command = parts[0]
-        pipe_commands = [f"| {p}" for p in parts[1:]]
-    else:
-        base_command = command
+    # Split command and grep pattern if exists
+    command_parts = command.split(' | grep ')
+    base_command = command_parts[0]
+    grep_pattern = command_parts[1] if len(command_parts) > 1 else None
     
     logger.debug(f"Executing command on {device_info['name']}: {base_command}")
-    if pipe_commands:
-        logger.debug(f"With pipe commands: {pipe_commands}")
+    if grep_pattern:
+        logger.debug(f"With grep pattern: {grep_pattern}")
     
     # Enhanced SSH connection parameters
     ssh_config = {
@@ -533,26 +529,31 @@ def execute_command(device_info, command, credentials):
                     
                     with dev:
                         # Execute command based on type
-                        if base_command.startswith('set ') or base_command.startswith('delete '):
-                            # Handle configuration commands
-                            logger.debug("Executing configuration command")
-                            with dev.config(mode='exclusive') as cu:
-                                cu.load(base_command, format='set')
-                                cu.commit()
-                            result = "Configuration committed successfully"
-                        else:
-                            # All other commands are treated as operational commands
-                            logger.debug("Executing operational command")
-                            # Execute the base command without any pipe filters
+                        if base_command.startswith('show'):
+                            logger.debug("Executing show command")
                             result = dev.cli(base_command, warning=False)
                             logger.debug(f"Raw command output type: {type(result)}")
+                            logger.debug(f"Raw command output: {result}")
                             
                             # Convert result to string if it's not already
                             if not isinstance(result, str):
                                 result = str(result)
                             
-                            # Process pipe commands locally
-                            result = process_pipe_commands(result, pipe_commands)
+                            # Apply grep filter if specified
+                            if grep_pattern:
+                                logger.debug("Applying grep filter")
+                                filtered_lines = []
+                                for line in result.split('\n'):
+                                    if grep_pattern.lower() in line.lower():
+                                        filtered_lines.append(line)
+                                result = '\n'.join(filtered_lines)
+                        else:
+                            # For configuration commands
+                            logger.debug("Executing configuration command")
+                            with dev.config(mode='exclusive') as cu:
+                                cu.load(base_command, format='set')
+                                cu.commit()
+                            result = "Configuration committed successfully"
                             
                         # Add port indicator to device name
                         port_indicator = "NETCONF" if port == 830 else "SSH"
@@ -602,65 +603,6 @@ def execute_command(device_info, command, credentials):
     # Fallback to SSH port (22) with 2 retries
     logger.debug("Attempting SSH connection")
     result = try_connection(22, max_retries=2)
-    return result
-
-def process_pipe_commands(output, pipe_commands):
-    """Process pipe commands on the output."""
-    result = output
-    
-    for cmd in pipe_commands:
-        cmd = cmd.strip()
-        logger.debug(f"Processing pipe command: {cmd}")
-        
-        if cmd.startswith('| match '):
-            pattern = cmd[8:].strip()  # Extract the pattern after '| match '
-            logger.debug(f"Applying match filter with pattern: '{pattern}'")
-            filtered_lines = []
-            for line in result.split('\n'):
-                if pattern in line:  # Case-sensitive match
-                    filtered_lines.append(line)
-            result = '\n'.join(filtered_lines)
-            
-        elif cmd.startswith('| count'):
-            count = len(result.split('\n'))
-            result = f"Count: {count} lines"
-            
-        elif cmd.startswith('| display '):
-            # Skip for now - these are typically handled by the device
-            continue
-            
-        elif cmd.startswith('| except '):
-            pattern = cmd[9:].strip()
-            filtered_lines = []
-            for line in result.split('\n'):
-                if pattern not in line:
-                    filtered_lines.append(line)
-            result = '\n'.join(filtered_lines)
-            
-        elif cmd.startswith('| find '):
-            pattern = cmd[7:].strip()
-            display = False
-            filtered_lines = []
-            for line in result.split('\n'):
-                if pattern in line:
-                    display = True
-                if display:
-                    filtered_lines.append(line)
-            result = '\n'.join(filtered_lines)
-            
-        elif cmd.startswith('| no-more'):
-            # This is handled by the device itself
-            continue
-            
-        elif cmd.startswith('| last '):
-            try:
-                n = int(cmd[7:].strip())
-                lines = result.split('\n')
-                if len(lines) > n:
-                    result = '\n'.join(lines[-n:])
-            except:
-                pass
-    
     return result
 
 def execute_commands_with_progress(devices, command, credentials):
