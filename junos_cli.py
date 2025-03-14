@@ -314,6 +314,9 @@ def parse_arguments():
                       default='')
     parser.add_argument('-s', '--sort', action='store_true',
                       help='Sort output: devices with output first, then alphabetically')
+    parser.add_argument('-i', '--inputfile',
+                      help='Input file containing commands to be executed (one command per line)',
+                      default='')
     return parser.parse_args()
 
 def load_devices(use_polarcall=False):
@@ -764,13 +767,13 @@ def sort_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     
     return sorted(results, key=sort_key)
 
-def save_results(results: List[Dict[str, Any]], output_file: str, command: str = ""):
+def save_results(results: List[Dict[str, Any]], output_file: str, command: str = "", append: bool = True):
     """Save results to a file based on the file extension.""" 
     # Get file extension
     _, ext = os.path.splitext(output_file.lower())
     
     # Check if file exists to determine if we're appending
-    file_exists = os.path.exists(output_file) and os.path.getsize(output_file) > 0
+    file_exists = os.path.exists(output_file) and os.path.getsize(output_file) > 0 and append
     
     # Get current timestamp
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -855,8 +858,10 @@ def save_results(results: List[Dict[str, Any]], output_file: str, command: str =
                     f.write(result['output'])
                     f.write("\n" + "-"*50 + "\n\n")
         
-        action = "appended to" if file_exists else "saved to"
-        console.print(f"\n[green]Results {action} {output_file}[/green]")
+        # Only show message if not in batch mode (otherwise too many messages)
+        if not getattr(save_results, 'batch_mode', False):
+            action = "appended to" if file_exists else "saved to"
+            console.print(f"\n[green]Results {action} {output_file}[/green]")
     except Exception as e:
         console.print(f"\n[red]Error saving results to {output_file}: {str(e)}[/red]")
 
@@ -918,14 +923,71 @@ def confirm_devices(devices):
         response = input("\nProceed with these devices? (y/n): ").lower().strip()
         if response == 'y':
             output_file = None
+            input_file = None
+            
             log_response = input("\nLog output to a file? (y/n): ").lower().strip()
             if log_response == 'y':
                 output_file = Prompt.ask("\nEnter output file name", default="junos_cli_output.txt")
-            return True, output_file
+                
+                # Ask for input command file
+                cmd_file_response = input("\nUse an input file with commands? (y/n): ").lower().strip()
+                if cmd_file_response == 'y':
+                    input_file = Prompt.ask("\nEnter input command file name", default="commands.txt")
+                    
+                    # Verify input file exists
+                    if not os.path.exists(input_file):
+                        console.print(f"\n[red]Warning: Input file '{input_file}' does not exist![/red]")
+                        if not Prompt.ask("\nContinue without command file?", default="y"):
+                            return False, None, None
+                        input_file = None
+            
+            return True, output_file, input_file
         elif response == 'n':
-            return False, None
+            return False, None, None
         else:
             console.print("[yellow]Please enter 'y' for yes or 'n' for no.[/yellow]")
+
+def read_commands_from_file(input_file):
+    """Read commands from input file, one command per line."""
+    commands = []
+    try:
+        with open(input_file, 'r') as f:
+            for line in f:
+                cmd = line.strip()
+                if cmd and not cmd.startswith('#'):  # Skip empty lines and comments
+                    commands.append(cmd)
+        return commands
+    except Exception as e:
+        console.print(f"\n[red]Error reading commands from file {input_file}: {str(e)}[/red]")
+        return []
+
+def batch_process_commands(devices, commands, credentials, output_file, sort_output=False):
+    """Process multiple commands from a file against all devices."""
+    console.print(f"\n[blue]Batch processing {len(commands)} commands against {len(devices)} devices...[/blue]")
+    
+    # Ensure output file is specified for batch mode
+    if not output_file:
+        console.print("[red]Error: Output file is required for batch processing mode.[/red]")
+        return False
+        
+    try:
+        first_command = True
+        for i, command in enumerate(commands, 1):
+            console.print(f"\n[cyan]Executing command {i}/{len(commands)}: {command}[/cyan]")
+            results = execute_commands_with_progress(devices, command, credentials)
+            
+            # In batch mode, only append to file, no console display
+            append_mode = not first_command
+            save_results(results, output_file, command, append=append_mode)
+            
+            if first_command:
+                first_command = False
+                
+        console.print(f"\n[green]Batch processing complete. All results saved to {output_file}[/green]")
+        return True
+    except Exception as e:
+        console.print(f"\n[red]Error during batch processing: {str(e)}[/red]")
+        return False
 
 def test_authentication(device, max_retries=3):
     """Test authentication with a device, allowing credential retries."""
@@ -961,6 +1023,12 @@ def main():
     """Main function to run the CLI tool.""" 
     try:
         args = parse_arguments()
+        
+        # Validate input/output file requirements
+        if args.inputfile and not args.output:
+            console.print("[red]Error: When using an input file (-i), an output file (-o) must also be specified.[/red]")
+            sys.exit(1)
+            
         devices = load_devices(args.polarcall)
         
         if not devices:
@@ -968,29 +1036,59 @@ def main():
             sys.exit(1)
         
         # Get user confirmation for the filtered devices
-        proceed, output_file = confirm_devices(devices)
+        proceed, output_file, input_file = confirm_devices(devices)
         if not proceed:
             console.print("[yellow]Operation cancelled by user[/yellow]")
             sys.exit(0)
             
         # Use command line argument if provided, otherwise use the prompted file
         output_file = args.output or output_file
+        input_file = args.inputfile or input_file
+        
+        # Validate input/output file requirements again (after user prompts)
+        if input_file and not output_file:
+            console.print("[red]Error: When using an input file, an output file must also be specified.[/red]")
+            sys.exit(1)
         
         credentials, test_result = test_authentication(devices[0])
         if not credentials:
             return
-            
-        console.print("\n[blue]Type 'exit' to end the application[/blue]")
-        console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
         
-        while True:
-            command = get_command()
+        # Batch mode - process commands from file
+        if input_file:
+            commands = read_commands_from_file(input_file)
+            if not commands:
+                console.print("[red]Error: No valid commands found in the input file.[/red]")
+                sys.exit(1)
+                
+            # Set batch mode flag
+            save_results.batch_mode = True
+                
+            # Process all commands in batch mode
+            success = batch_process_commands(devices, commands, credentials, output_file, args.sort)
+            if not success:
+                console.print("[red]Batch processing failed.[/red]")
+                sys.exit(1)
+        else:
+            # Interactive mode
+            console.print("\n[blue]Type 'exit' to end the application[/blue]")
+            console.print("[blue]Use Tab for command completion and Arrow keys for history[/blue]\n")
             
-            if command.lower() == 'exit':
-                break
+            # Flag to track if it's the first command (for append mode)
+            first_command = True
             
-            results = execute_commands_with_progress(devices, command, credentials)
-            display_results(results, output_file, args.sort, command)
+            while True:
+                command = get_command()
+                
+                if command.lower() == 'exit':
+                    break
+                
+                results = execute_commands_with_progress(devices, command, credentials)
+                display_results(results, output_file, args.sort, command)
+                
+                # After first command, set flag for append mode
+                if first_command:
+                    first_command = False
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled by user[/yellow]")
